@@ -1,0 +1,12 @@
+services:
+  api:
+    build: api
+    ports:
+      - 3000:3000
+    depends_on:
+      - redis
+    environment:
+      - REDIS_URL=redis://redis
+
+  redis:
+    image: redis
