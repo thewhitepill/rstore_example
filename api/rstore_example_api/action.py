@@ -3,7 +3,7 @@ from typing import Annotated, Literal, Union
 
 from pydantic import BaseModel, Field
 
-from .model import Message
+from .model import Message, UserData
 
 
 class ActionType(StrEnum):
@@ -28,8 +28,7 @@ class AddUserAction(BaseModel):
         Field(default=ActionType.ADD_USER)
     ]
 
-    channel_name: str
-    user_name: str
+    data: UserData
 
 
 class RemoveUserAction(BaseModel):
@@ -38,12 +37,12 @@ class RemoveUserAction(BaseModel):
         Field(default=ActionType.REMOVE_USER)
     ]
 
-    user_name: str
-    channel_name: str
+    data: UserData
 
 
 AppAction = Annotated[
     Union[
+        AddMessageAction,
         AddUserAction,
         RemoveUserAction
     ],

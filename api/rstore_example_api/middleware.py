@@ -29,18 +29,19 @@ async def system_message_middleware(
     next: Dispatch,
     action: AppAction
 ) -> App:
-    message: Message
     result = await next(action)
 
     match action:
-        case AddUserAction(channel_name=channel_name, user_name=user_name):
-            message = SystemMessage.user_joined(user_name)
+        case AddUserAction(data=data):
+            channel_name = data.channel_name
+            message = SystemMessage.user_joined(data.name)
 
-        case RemoveUserAction(channel_name=channel_name, user_name=user_name):
-            message = SystemMessage.user_left(user_name)
+        case RemoveUserAction(data=data):
+            channel_name = data.channel_name
+            message = SystemMessage.user_left(data.name)
 
         case _:
             return result
-    
-    asyncio.create_task(_send_message(channel_name, message))
+
+    asyncio.create_task(_send_message(store, channel_name, message))
     return result

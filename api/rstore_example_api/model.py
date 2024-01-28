@@ -8,11 +8,19 @@ from typing import Annotated, Literal, Union
 from pydantic import BaseModel, Field
 
 
+class DuplicateEntityError(Exception):
+    pass
+
+
 class EntityNotFoundError(Exception):
     pass
 
 
 class ChannelNotFoundError(EntityNotFoundError):
+    pass
+
+
+class DuplicateUserError(DuplicateEntityError):
     pass
 
 
@@ -63,95 +71,106 @@ Message = Annotated[
 ]
 
 
-class User(BaseModel):
+class UserData(BaseModel):
+    session_id: str
     name: str
-    color_id: int
+    channel_name: str
 
-    @classmethod
-    def from_name(cls, name: str) -> User:
-        return cls(name=name, color_id=random.randrange(255))
+
+class User(BaseModel):
+    session_id: str
+    name: str
+    channel_name: str
+    color_id: Annotated[
+        int,
+        Field(default_factory=lambda: random.randrange(255))
+    ]
 
 
 class Channel(BaseModel):
     name: str
-    users: dict[str, User]
-    messages: list[UserMessage]
+    users: Annotated[dict[str, User], Field(default_factory=dict)]
+    messages: Annotated[list[UserMessage], Field(default_factory=list)]
 
     def append_message(self, message: UserMessage) -> Channel:
         messages = [*self.messages, message]
 
-        return self.model_copy(
-            update={
-                "messages": messages
-            }
-        )
+        return self.copy(update={"messages": messages})
 
-    def append_user(self, user: User) -> Channel:
-        users = self.users.copy()
-        users[user.name] = user
+    def del_user(self, user_name: str) -> Channel:
+        if user_name not in self.users:
+            raise UserNotFoundError
 
-        return self.model_copy(
-            update={
-                "users": users
-            }
-        )
-    
-    def remove_user(self, user_name: str) -> Channel:
-        if not user_name in self.users:
-            raise EntityNotFoundError
-        
         users = self.users.copy()
         del users[user_name]
 
-        return self.model_copy(
-            update={
-                "users": users
-            }
-        )
+        return self.copy(update={"users": users})
 
-    @classmethod
-    def from_name(cls, name: str) -> Channel:
-        return cls(
-            name=name,
-            users={},
-            messages=[]
-        )
+    def set_user(self, user_name, user: User) -> Channel:
+        users = self.users.copy()
+        users[user_name] = user
+
+        return self.copy(update={"users": users})
 
 
 class App(BaseModel):
     channels: dict[str, Channel]
+    users: dict[str, User]
 
-    def del_channel(self, name: str) -> App:
-        if not self.channels.get(name):
-            raise ChannelNotFoundError
-        
-        channels = self.channels.copy()
-        del channels[name]
-
-        return self.model_copy(
-            update={
-                "channels": channels
-            }
-        )
-
-    def get_channel(self, name: str) -> Channel:
-        channel = self.channels.get(name)
-
-        if not channel:
+    def add_message(self, channel_name: str, message: Message) -> App:
+        if channel_name not in self.channels:
             raise ChannelNotFoundError
 
-        return channel
+        channel = self.channels[channel_name]
+        channel = channel.append_message(message)
 
-    def set_channel(self, name: str, channel: Channel) -> App:
         channels = self.channels.copy()
-        channels[name] = channel
+        channels[channel_name] = channel
 
-        return self.model_copy(
-            update={
-                "channels": channels
-            }
-        )
+        return self.copy(update={"channels": channels})
+
+    def add_user(self, data: UserData) -> App:
+        if data.session_id in self.users:
+            raise DuplicateUserError
+
+        if data.channel_name in self.channels:
+            channel = self.channels[data.channel_name]
+
+            if data.name in channel.users:
+                raise DuplicateUserError
+        else:
+            channel = Channel(name=data.channel_name)
+
+        user = User(**data.dict())
+        channel = channel.set_user(data.name, user)
+
+        channels = self.channels.copy()
+        channels[data.channel_name] = channel
+
+        users = self.users.copy()
+        users[data.session_id] = user
+
+        return App(channels=channels, users=users)
+
+    def remove_user(self, session_id: str) -> App:
+        if session_id not in self.users:
+            raise UserNotFoundError
+
+        user = self.users[session_id]
+        users = self.users.copy()
+        del users[session_id]
+
+        channel = self.channels[user.channel_name]
+        channel = channel.del_user(user.name)
+
+        if not channel.users:
+            channels = self.channels.copy()
+            del channels[user.channel_name]
+        else:
+            channels = self.channels
+
+        return App(channels=channels, users=users)
 
     @classmethod
     def empty(cls) -> App:
-        return cls(channels={})
+        return cls(channels={}, users={})
