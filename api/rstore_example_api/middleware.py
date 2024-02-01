@@ -1,13 +1,12 @@
-import asyncio
-
 from rstore import Dispatch, Store
 
-from .model import App, Message, SystemMessage
 from .action import AppAction, AddMessageAction, AddUserAction, RemoveUserAction
+from .model import AppState, Message, SystemMessage
+from .task import run_task
 
 
 async def _send_message(
-    store: Store[App, AppAction],
+    store: Store[AppState, AppAction],
     channel_name: str,
     message: Message
 ) -> None:
@@ -25,10 +24,10 @@ async def _send_message(
 
 
 async def system_message_middleware(
-    store: Store[App, AppAction],
+    store: Store[AppState, AppAction],
     next: Dispatch,
     action: AppAction
-) -> App:
+) -> AppState:
     result = await next(action)
 
     match action:
@@ -43,5 +42,6 @@ async def system_message_middleware(
         case _:
             return result
 
-    asyncio.create_task(_send_message(store, channel_name, message))
+    run_task(_send_message(store, channel_name, message))
+
     return result

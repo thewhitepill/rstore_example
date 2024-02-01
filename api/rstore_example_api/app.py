@@ -1,4 +1,3 @@
-import os
 import redis.asyncio
 import rstore
 import secrets
@@ -7,8 +6,8 @@ from typing import Annotated, Optional
 
 from fastapi import (
     Cookie,
+    Depends,
     FastAPI,
-    HTTPException,
     Response,
     WebSocket,
     WebSocketDisconnect
@@ -16,21 +15,28 @@ from fastapi import (
 
 from fastapi.middleware.cors import CORSMiddleware
 
-from .action import AddUserAction, RemoveUserAction
+from .action import AddMessageAction, AddUserAction, AppAction, RemoveUserAction
+from .config import config
 from .middleware import system_message_middleware
-from .model import App, Channel, UserData
+from .model import (
+    AccessError,
+    AppState,
+    Channel,
+    Message,
+    UserData,
+    UserMessage,
+    UserMessageData,
+    UserNotFoundError
+)
+
 from .reducer import app_reducer
+from .task import run_task
 
 
-class AccessError(HTTPException):
-    def __init__(self) -> None:
-        super().__init__(status_code=403)
-
-
-client = redis.asyncio.from_url(os.environ["REDIS_URL"])
+redis_client = redis.asyncio.from_url(config.redis.url)
 store = rstore.create_store(
     app_reducer,
-    initial_state_factory=App.empty,
+    initial_state_factory=AppState.empty,
     middleware=[
         system_message_middleware
     ]
@@ -52,26 +58,55 @@ app.add_middleware(
 websockets = {}
 
 
+def get_session_id(
+    session_id: Annotated[Optional[str], Cookie()] = None
+) -> str:
+    if not session_id:
+        raise AccessError
+
+    return session_id
+
+
+SessionId = Annotated[str, Depends(get_session_id)]
+
+
+async def broadcast_message(channel_name: str, message: Message) -> None:
+    state = await store.get_state()
+    channel = state.get_channel(channel_name)
+
+    for user in channel.users.values():
+        websocket = websockets.get(user.session_id)
+
+        if not websocket:
+            continue
+
+        await websocket.send_json(message)
+
+
+def message_broadcaster(action: AppAction, state: AppState) -> None:
+    if not isinstance(action, AddMessageAction):
+        return
+
+    run_task(broadcast_message(action.channel_name, action.message))
+
+
+store.subscribe(message_broadcaster)
+
+
 @app.on_event("startup")
 async def handle_startup() -> None:
-    await client.ping()
-    await store.bind(client)
+    await redis_client.ping()
+    await store.bind(redis_client)
 
 
 @app.on_event("shutdown")
 async def handle_shutdown() -> None:
     await store.unbind()
-    await client.close()
+    await redis_client.close()
 
 
 @app.websocket("/ws")
-async def websocket_endpoint(
-    websocket: WebSocket,
-    session_id: Annotated[Optional[str], Cookie()] = None
-) -> None:
-    if not session_id:
-        raise AccessError
-
+async def connect(websocket: WebSocket, session_id: SessionId) -> None:
     await websocket.accept()
 
     websockets[session_id] = websocket
@@ -95,7 +130,7 @@ async def websocket_endpoint(
 
 
 @app.post("/session")
-async def post_session(response: Response) -> dict:
+async def register(response: Response) -> dict:
     session_id = secrets.token_hex(32)
 
     response.set_cookie("session_id", session_id, httponly=True)
@@ -104,14 +139,11 @@ async def post_session(response: Response) -> dict:
 
 
 @app.post("/channel/{channel_name}/user/{user_name}")
-async def post_channel_user(
+async def join_channel(
     channel_name: str,
     user_name: str,
-    session_id: Annotated[Optional[str], Cookie()] = None
+    session_id: SessionId
 ) -> Channel:
-    if not session_id:
-        raise AccessError
-
     data = UserData(
         session_id=session_id,
         name=user_name,
@@ -126,5 +158,35 @@ async def post_channel_user(
 
 
 @app.post("/channel/{channel_name}/message")
-async def post_channel_message(channel_name: str, message: dict) -> dict:
-    pass
+async def send_message(
+    channel_name: str,
+    data: UserMessageData,
+    session_id: SessionId
+) -> dict:
+    state = await store.get_state()
+
+    user_by_session_id = state.get_user(session_id)
+    channel = state.get_channel(channel_name)
+
+    try:
+        user_by_name = channel.get_user(user_by_session_id.name)
+    except UserNotFoundError:
+        raise AccessError
+
+    if user_by_session_id.session_id != user_by_name.session_id:
+        raise AccessError
+
+    message = UserMessage(
+        sender_name=user_by_name.name,
+        sender_color_id=user_by_name.color_id,
+        content=data.content
+    )
+
+    action = AddMessageAction(
+        channel_name=channel_name,
+        message=message
+    )
+
+    await store.dispatch(action)
+
+    return {}

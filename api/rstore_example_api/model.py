@@ -8,6 +8,10 @@ from typing import Annotated, Literal, Union
 from pydantic import BaseModel, Field
 
 
+class AccessError(Exception):
+    pass
+
+
 class DuplicateEntityError(Exception):
     pass
 
@@ -65,6 +69,10 @@ class UserMessage(BaseModel):
     content: str
 
 
+class UserMessageData(BaseModel):
+    content: str
+
+
 Message = Annotated[
     Union[SystemMessage, UserMessage],
     Field(discriminator="type")
@@ -106,6 +114,12 @@ class Channel(BaseModel):
 
         return self.copy(update={"users": users})
 
+    def get_user(self, user_name: str) -> User:
+        if user_name not in self.users:
+            raise UserNotFoundError
+
+        return self.users[user_name]
+
     def set_user(self, user_name, user: User) -> Channel:
         users = self.users.copy()
         users[user_name] = user
@@ -113,15 +127,12 @@ class Channel(BaseModel):
         return self.copy(update={"users": users})
 
 
-class App(BaseModel):
+class AppState(BaseModel):
     channels: dict[str, Channel]
     users: dict[str, User]
 
-    def add_message(self, channel_name: str, message: Message) -> App:
-        if channel_name not in self.channels:
-            raise ChannelNotFoundError
-
-        channel = self.channels[channel_name]
+    def add_message(self, channel_name: str, message: Message) -> AppState:
+        channel = self.get_channel(channel_name)
         channel = channel.append_message(message)
 
         channels = self.channels.copy()
@@ -129,7 +140,7 @@ class App(BaseModel):
 
         return self.copy(update={"channels": channels})
 
-    def add_user(self, data: UserData) -> App:
+    def add_user(self, data: UserData) -> AppState:
         if data.session_id in self.users:
             raise DuplicateUserError
 
@@ -150,13 +161,22 @@ class App(BaseModel):
         users = self.users.copy()
         users[data.session_id] = user
 
-        return App(channels=channels, users=users)
+        return AppState(channels=channels, users=users)
 
-    def remove_user(self, session_id: str) -> App:
+    def get_channel(self, name: str) -> Channel:
+        if name not in self.channels:
+            raise ChannelNotFoundError
+
+        return self.channels[name]
+
+    def get_user(self, session_id: str) -> User:
         if session_id not in self.users:
             raise UserNotFoundError
 
-        user = self.users[session_id]
+        return self.users[session_id]
+
+    def remove_user(self, session_id: str) -> AppState:
+        user = self.get_user(session_id)
         users = self.users.copy()
         del users[session_id]
 
@@ -169,8 +189,8 @@ class App(BaseModel):
         else:
             channels = self.channels
 
-        return App(channels=channels, users=users)
+        return AppState(channels=channels, users=users)
 
     @classmethod
-    def empty(cls) -> App:
+    def empty(cls) -> AppState:
         return cls(channels={}, users={})
