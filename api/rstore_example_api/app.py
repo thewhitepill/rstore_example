@@ -47,11 +47,26 @@ app = FastAPI()
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "http://localhost"
+        "http://localhost:5173"
     ],
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"]
+    allow_methods=[
+        "GET",
+        "HEAD",
+        "POST",
+        "PUT",
+        "DELETE",
+        "CONNECT",
+        "OPTIONS",
+        "TRACE",
+        "PATCH"
+    ],
+    allow_headers=[
+        "Access-Control-Allow-Headers",
+        "Content-Type",
+        "Authorization",
+        "Access-Control-Allow-Origin"
+    ]
 )
 
 
@@ -124,7 +139,7 @@ async def connect(websocket: WebSocket, session_id: SessionId) -> None:
 
         user = state.users[session_id]
         data = UserData(**user.dict())
-        action = RemoveUserAction(data)
+        action = RemoveUserAction(data=data)
 
         await store.dispatch(action)
 
@@ -150,7 +165,7 @@ async def join_channel(
         channel_name=channel_name
     )
 
-    action = AddUserAction(data)
+    action = AddUserAction(data=data)
     state = await store.dispatch(action)
     channel = state.channels[channel_name]
 

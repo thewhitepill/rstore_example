@@ -432,7 +432,7 @@ redis = "^5.0.1"
 type = "git"
 url = "https://github.com/thewhitepill/rstore.git"
 reference = "HEAD"
-resolved_reference = "986db24753157e20a5ce0426bef28d23d70928f9"
+resolved_reference = "6562e689648d475be4dc3ce46f46def1a483b939"
 
 [[package]]
 name = "ruff"
